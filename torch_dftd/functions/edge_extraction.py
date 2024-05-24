@@ -25,7 +25,7 @@ def calc_neighbor_by_ase(
 
 
 def calc_neighbor_by_pymatgen(
-    pos: Tensor, cell: Tensor, pbc: Tensor, cutoff: float
+    pos: Tensor, cell: Tensor, pbc: Tensor, cutoff: float, indices: Optional[list] = None, gas_mof_only: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """calculate neighbor nodes in pbc condition.
 
@@ -37,6 +37,7 @@ def calc_neighbor_by_pymatgen(
         cell (Tensor):
         pbc (Tensor): periodic boundary condition.
         cutoff (float): cutoff distance to find neighbor
+        indices (list): atom indices in interest, to calculate neighbor list.
 
     Returns:
         edge_index (Tensor): (2, n_edges) indices of edge, src -> dst.
@@ -51,25 +52,62 @@ def calc_neighbor_by_pymatgen(
     symbols = np.ones(n_atoms)  # Dummy symbols to create `Structure`...
 
     struct = Structure(lattice, symbols, positions, coords_are_cartesian=True)
+    if gas_mof_only:
+        seq = [struct[i] for i in indices]
+    else:
+        seq = None
     c_index, n_index, offsets, n_distance = struct.get_neighbor_list(
         r=cutoff,
+        sites=seq,
         numerical_tol=1e-8,
         exclude_self=True,
     )
+
+    if seq is not None:
+        #change unmatched indices to original indices
+        for i, index in enumerate(indices):
+            c_index[np.where(c_index == i)] = index
+            #remove gas-gas self interaction
+            indices_tmp = np.where(np.logical_and(np.logical_and(c_index==index, n_index==index), n_distance<1e-5))[0]
+            c_index = np.delete(c_index, indices_tmp,0)
+            n_index = np.delete(n_index, indices_tmp,0)
+            offsets = np.delete(offsets, indices_tmp,0)
+            n_distance = np.delete(n_distance, indices_tmp,0)
+        #duplicate Framework-Gas Edges
+        edges_frame_gas = np.where(~np.isin(n_index, indices))[0]
+        c_index = np.concatenate((c_index, n_index[edges_frame_gas]), axis=0)
+        n_index = np.concatenate((n_index, c_index[edges_frame_gas]), axis=0)
+        offsets = np.concatenate((offsets, -offsets[edges_frame_gas]), axis=0)
+        n_distance = np.concatenate((n_distance, n_distance[edges_frame_gas]), axis=0)
+    '''
+    if indices is not None:
+        indices_interest = np.where(np.logical_or(np.isin(c_index, indices), np.isin(n_index, indices)))[0]
+        indices_interest = torch.tensor(
+            indices_interest, dtype=torch.long, device=pos.device
+        )
+    else:
+        indices_interest = None
+    '''
+    indices_interest = None
     edge_index = torch.tensor(
         np.stack([c_index, n_index], axis=0), dtype=torch.long, device=pos.device
     )
+    n_distance = torch.tensor(
+        n_distance, dtype=torch.double, device=pos.device
+    )
     S = torch.tensor(offsets, dtype=pos.dtype, device=pos.device)
 
-    return edge_index, S
+    return edge_index, S, indices_interest, n_distance
 
 
 def calc_edge_index(
     pos: Tensor,
     cell: Optional[Tensor] = None,
     pbc: Optional[Tensor] = None,
+    indices: Optional[list] = None,
     cutoff: float = 95.0 * Bohr,
     bidirectional: bool = False,
+    gas_mof_only: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Calculate atom pair as `edge_index`, and shift vector `S`.
 
@@ -77,6 +115,7 @@ def calc_edge_index(
         pos (Tensor): atom positions in angstrom
         cell (Tensor): cell size in angstrom, None for non periodic system.
         pbc (Tensor): pbc condition, None for non periodic system.
+        indices (list): atom indices in interest, to calculate neighbor list.
         cutoff (float): cutoff distance in angstrom
         bidirectional (bool): calculated `edge_index` is bidirectional or not.
 
@@ -107,9 +146,9 @@ def calc_edge_index(
             S = torch.zeros_like(pos)
         else:
             try:
-                edge_index, S = calc_neighbor_by_pymatgen(pos, cell, pbc, cutoff)
+                edge_index, S, indices_interest, n_distance = calc_neighbor_by_pymatgen(pos, cell, pbc, cutoff, indices, gas_mof_only)
             except NotImplementedError:
                 # This is slower.
                 edge_index, S = calc_neighbor_by_ase(pos, cell, pbc, cutoff)
 
-    return edge_index, S
+    return edge_index, S, indices_interest, n_distance

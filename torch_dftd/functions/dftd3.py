@@ -158,6 +158,7 @@ def edisp(
     bidirectional: bool = False,
     abc: bool = False,
     n_chunks: Optional[int] = None,
+    indices_interest: Optional[Tensor] = None,
 ):
     """compute d3 dispersion energy in Hartree
 
@@ -188,6 +189,7 @@ def edisp(
         bidirectional (bool): calculated `edge_index` is bidirectional or not.
         abc (bool): ATM 3-body interaction
         n_chunks (int or None): number of times to split c6 computation to reduce peak memory
+        indices_interest (Tensor or None): (n_edges,) 
 
     Returns:
         energy: (n_graphs,) Energy in Hartree unit.
@@ -270,13 +272,23 @@ def edisp(
     e6 = -0.5 * s6 * c6 * e6  # (n_edges,)
     e8 = -0.5 * s8 * c8 * e8  # (n_edges,)
     e68 = e6 + e8
-
+    torch.save(e68,'/home/users/hong/mace_henry_test/e68_orig.pt')
+    if indices_interest is not None:
+        e68_left = e68[~torch.isin(torch.arange(len(e68), dtype=torch.float64, device=Z.device), indices_interest)]
+        torch.save(e68_left,'/home/users/hong/mace_henry_test/e68_left.pt')
+        e68 = e68[indices_interest]
+        torch.save(e68,'/home/users/hong/mace_henry_test/e68_new.pt')
+        r = r[indices_interest]
+    
     if cutoff is not None and cutoff_smoothing == "poly":
         e68 *= poly_smoothing(r, cutoff)
 
     if batch_edge is None:
         # (1,)
         g = e68.to(torch.float64).sum()[None]
+        if indices_interest is not None:
+            g_left = e68_left.to(torch.float64).sum()[None]
+            print(g_left.item())
     else:
         # (n_graphs,)
         if batch.size()[0] == 0:

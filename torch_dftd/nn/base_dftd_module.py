@@ -53,6 +53,8 @@ class BaseDFTDModule(nn.Module):
         batch: Optional[Tensor] = None,
         batch_edge: Optional[Tensor] = None,
         damping: str = "zero",
+        indices_interest: Optional[Tensor] = None,
+        n_distance: Optional[Tensor] = None,
     ) -> List[Dict[str, Any]]:
         """Forward computation of dispersion energy
 
@@ -74,7 +76,7 @@ class BaseDFTDModule(nn.Module):
         """
         with torch.no_grad():
             E_disp = self.calc_energy_batch(
-                Z, pos, edge_index, cell, pbc, shift_pos, batch, batch_edge, damping=damping
+                Z, pos, edge_index, cell, pbc, shift_pos, batch, batch_edge, damping=damping, indices_interest=indices_interest, n_distance=n_distance,
             )
         if batch is None:
             return [{"energy": E_disp.item()}]

@@ -1,6 +1,7 @@
 from typing import Dict, Optional, Tuple
 
 import torch
+import pickle
 from ase import Atoms
 from ase.calculators.calculator import Calculator, PropertyNotImplementedError, all_changes
 from ase.units import Bohr
@@ -49,6 +50,7 @@ class TorchDFTD3Calculator(Calculator):
         dtype: torch.dtype = torch.float32,
         bidirectional: bool = True,
         cutoff_smoothing: str = "none",
+        indices: Optional[list] = None,
         **kwargs,
     ):
         self.dft = dft
@@ -79,6 +81,7 @@ class TorchDFTD3Calculator(Calculator):
         self.dtype = dtype
         self.cutoff = cutoff
         self.bidirectional = bidirectional
+        self.indices = indices
         super(TorchDFTD3Calculator, self).__init__(atoms=atoms, **kwargs)
 
     def _calc_edge_index(
@@ -86,12 +89,14 @@ class TorchDFTD3Calculator(Calculator):
         pos: Tensor,
         cell: Optional[Tensor] = None,
         pbc: Optional[Tensor] = None,
+        indices: Optional[list] = None,
+        gas_mof_only: bool = False,
     ) -> Tuple[Tensor, Tensor]:
         return calc_edge_index(
-            pos, cell, pbc, cutoff=self.cutoff, bidirectional=self.bidirectional
+            pos, cell, pbc, indices=self.indices, cutoff=self.cutoff, bidirectional=self.bidirectional, gas_mof_only=gas_mof_only,
         )
 
-    def _preprocess_atoms(self, atoms: Atoms) -> Dict[str, Optional[Tensor]]:
+    def _preprocess_atoms(self, atoms: Atoms, gas_mof_only=False) -> Dict[str, Optional[Tensor]]:
         pos = torch.tensor(atoms.get_positions(), device=self.device, dtype=self.dtype)
         Z = torch.tensor(atoms.get_atomic_numbers(), device=self.device)
         if any(atoms.pbc):
@@ -101,13 +106,13 @@ class TorchDFTD3Calculator(Calculator):
         else:
             cell = None
         pbc = torch.tensor(atoms.pbc, device=self.device)
-        edge_index, S = self._calc_edge_index(pos, cell, pbc)
+        edge_index, S, indices_interest, n_distance = self._calc_edge_index(pos, cell, pbc, self.indices, gas_mof_only)
         if cell is None:
             shift_pos = S
         else:
             shift_pos = torch.mm(S, cell.detach())
         input_dicts = dict(
-            pos=pos, Z=Z, cell=cell, pbc=pbc, edge_index=edge_index, shift_pos=shift_pos
+            pos=pos, Z=Z, cell=cell, pbc=pbc, edge_index=edge_index, shift_pos=shift_pos, indices_interest=indices_interest, n_distance=n_distance,
         )
         return input_dicts
 
@@ -153,9 +158,23 @@ class TorchDFTD3Calculator(Calculator):
         else:
             return dft_result + dftd3_result
 
-    def batch_calculate(self, atoms_list=None, properties=["energy"], system_changes=all_changes):
+    def batch_calculate(self, atoms_list=None, properties=["energy"], system_changes=all_changes, gas_mof_only=True):
         # Calculator.calculate(self, atoms, properties, system_changes)
-        input_dicts_list = [self._preprocess_atoms(atoms) for atoms in atoms_list]
+        if gas_mof_only:
+            atoms_indices = list(range(len(atoms_list[0])))
+            framework_indices = list(filter(lambda x: atoms_indices.index(x) not in self.indices, atoms_indices))
+            framework_input_dict = self._preprocess_atoms(atoms_list[0][framework_indices])
+            input_dicts_list = []
+            for atoms in atoms_list:
+                input_dict_tmp = self._preprocess_atoms(atoms, gas_mof_only=True)
+                input_dict_tmp['edge_index'] = torch.cat((framework_input_dict['edge_index'], input_dict_tmp['edge_index']), dim=1)
+                input_dict_tmp['shift_pos'] = torch.cat((framework_input_dict['shift_pos'], input_dict_tmp['shift_pos']), dim=0)
+                input_dict_tmp['n_distance'] = torch.cat((framework_input_dict['n_distance'], input_dict_tmp['n_distance']), dim=0)
+                with open('data.pkl', 'wb') as f:
+                    pickle.dump(input_dict_tmp, f)
+                input_dicts_list += [input_dict_tmp]
+        else:
+            input_dicts_list = [self._preprocess_atoms(atoms) for atoms in atoms_list]
         # --- Make batch ---
         n_nodes_list = [d["Z"].shape[0] for d in input_dicts_list]
         shift_index_array = torch.cumsum(torch.tensor([0] + n_nodes_list), dim=0)
