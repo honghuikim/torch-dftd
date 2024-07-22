@@ -11,6 +11,8 @@ from torch_dftd.functions.edge_extraction import calc_edge_index
 from torch_dftd.nn.dftd2_module import DFTD2Module
 from torch_dftd.nn.dftd3_module import DFTD3Module
 
+import time
+
 
 class TorchDFTD3Calculator(Calculator):
     """ase compatible DFTD3 calculator using pytorch
@@ -97,26 +99,33 @@ class TorchDFTD3Calculator(Calculator):
         )
 
     def _preprocess_atoms(self, atoms: Atoms, gas_mof_only=False) -> Dict[str, Optional[Tensor]]:
+        start_time = time.time()
         pos = torch.tensor(atoms.get_positions(), device=self.device, dtype=self.dtype)
         Z = torch.tensor(atoms.get_atomic_numbers(), device=self.device)
         if any(atoms.pbc):
             cell: Optional[Tensor] = torch.tensor(
-                atoms.get_cell(), device=self.device, dtype=self.dtype
+                atoms.cell.array, device=self.device, dtype=self.dtype
             )
         else:
             cell = None
         pbc = torch.tensor(atoms.pbc, device=self.device)
         edge_index, S, indices_interest, n_distance = self._calc_edge_index(pos, cell, pbc, self.indices, gas_mof_only)
+        s_time = time.time()
         if cell is None:
             shift_pos = S
         else:
             shift_pos = torch.mm(S, cell.detach())
+        e_time = time.time()
+        print(f"preprocess_tmp: {e_time-s_time}")
         input_dicts = dict(
             pos=pos, Z=Z, cell=cell, pbc=pbc, edge_index=edge_index, shift_pos=shift_pos, indices_interest=indices_interest, n_distance=n_distance,
         )
+        end_time = time.time()
+        print(f"preprocess_atom: {end_time-start_time}")
         return input_dicts
 
     def calculate(self, atoms=None, properties=["energy"], system_changes=all_changes):
+        start_time = time.time()
         Calculator.calculate(self, atoms, properties, system_changes)
         input_dicts = self._preprocess_atoms(atoms)
 
@@ -141,6 +150,8 @@ class TorchDFTD3Calculator(Calculator):
             self.results["forces"] = results["forces"]
         if "stress" in results:
             self.results["stress"] = results["stress"]
+        end_time = time.time()
+        print(f"calculate {end_time-start_time}")
 
     def get_property(self, name, atoms=None, allow_calculation=True):
         dft_result = None

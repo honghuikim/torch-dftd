@@ -7,6 +7,7 @@ from ase.units import Bohr
 from pymatgen.core import Structure
 from torch import Tensor
 
+import time
 
 def calc_neighbor_by_ase(
     pos: Tensor, cell: Tensor, pbc: Tensor, cutoff: float
@@ -146,7 +147,10 @@ def calc_edge_index(
             S = torch.zeros_like(pos)
         else:
             try:
+                start_time = time.time()
                 edge_index, S, indices_interest, n_distance = calc_neighbor_by_pymatgen(pos, cell, pbc, cutoff, indices, gas_mof_only)
+                end_time = time.time()
+                print(f"pymatgen neighbor list search:{end_time-start_time}")
             except NotImplementedError:
                 # This is slower.
                 edge_index, S = calc_neighbor_by_ase(pos, cell, pbc, cutoff)

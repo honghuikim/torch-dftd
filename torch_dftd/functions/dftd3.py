@@ -272,12 +272,9 @@ def edisp(
     e6 = -0.5 * s6 * c6 * e6  # (n_edges,)
     e8 = -0.5 * s8 * c8 * e8  # (n_edges,)
     e68 = e6 + e8
-    torch.save(e68,'/home/users/hong/mace_henry_test/e68_orig.pt')
     if indices_interest is not None:
         e68_left = e68[~torch.isin(torch.arange(len(e68), dtype=torch.float64, device=Z.device), indices_interest)]
-        torch.save(e68_left,'/home/users/hong/mace_henry_test/e68_left.pt')
         e68 = e68[indices_interest]
-        torch.save(e68,'/home/users/hong/mace_henry_test/e68_new.pt')
         r = r[indices_interest]
     
     if cutoff is not None and cutoff_smoothing == "poly":
@@ -389,7 +386,6 @@ def edisp(
         tmp2 = r2ik * r2jk * r2ij
         ang = (0.375 * t1 * t2 * t3 / tmp2 + 1.0) / (tmp2**1.5)
         e3 = damp * c9 * ang / multiplicity
-
         # ---------------------------------------------------------------
         # TODO: support cutoff_smoothing
         if batch_edge is None:
